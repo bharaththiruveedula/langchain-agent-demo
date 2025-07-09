@@ -697,7 +697,10 @@ async def chat_endpoint(message: ChatMessage):
             message=final_state.response_message if final_state.response_message else "Response generated successfully",
             sender="assistant",
             data=final_state.response_data if final_state.response_data else None,
-            table_data=final_state.response_table if final_state.response_table else None
+            table_data=final_state.response_table if final_state.response_table else None,
+            workflow_progress=final_state.workflow_progress,
+            current_agent=final_state.current_agent,
+            processing_status="completed" if not final_state.error else "failed"
         )
         
         # Save assistant response
