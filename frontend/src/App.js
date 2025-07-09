@@ -256,9 +256,9 @@ const ChatInterface = () => {
             {messages.length === 0 ? (
               <WelcomeMessage />
             ) : (
-              messages.map((msg) => (
+              messages.map((msg, index) => (
                 <ChatMessage
-                  key={msg.id}
+                  key={`${msg.id}-${index}`}
                   message={msg}
                   isUser={msg.sender === 'user'}
                 />
