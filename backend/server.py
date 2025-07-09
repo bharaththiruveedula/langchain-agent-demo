@@ -6,8 +6,8 @@ from bson import ObjectId
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, validator
-from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any, Literal
 import uuid
 from datetime import datetime
 import json
@@ -16,20 +16,41 @@ import aiohttp
 import ipaddress
 import re
 from urllib.parse import urlparse
-from infoblox_client import connector
-from infoblox_client import objects
+import google.generativeai as genai
 from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnableLambda
-from langchain_community.llms import Ollama
 import pandas as pd
 import traceback
+from tabulate import tabulate
+import csv
+from io import StringIO
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+# MongoDB connection
+mongo_url = os.environ['MONGO_URL']
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ['DB_NAME']]
+
+# Create the main app
+app = FastAPI(title="OpenShift Cluster Management API")
+api_router = APIRouter(prefix="/api")
+
+# Settings
+class Settings:
+    infoblox_host = os.environ.get('INFOBLOX_HOST', 'localhost')
+    infoblox_username = os.environ.get('INFOBLOX_USERNAME', 'admin')
+    infoblox_password = os.environ.get('INFOBLOX_PASSWORD', 'password')
+    infoblox_api_version = os.environ.get('INFOBLOX_API_VERSION', 'v2.5')
+    dns_view = os.environ.get('DNS_VIEW', 'default')
+    google_gemini_api_key = os.environ.get('GOOGLE_GEMINI_API_KEY')
+
+settings = Settings()
+
+# Configure Google Gemini
+genai.configure(api_key=settings.google_gemini_api_key)
+gemini_model = genai.GenerativeModel('gemini-2.0-flash-exp')
 
 # Helper functions for MongoDB serialization
 def serialize_mongo_document(doc):
@@ -61,26 +82,6 @@ def serialize_mongo_document(doc):
     
     return doc
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
-
-# Create the main app
-app = FastAPI(title="OpenShift Cluster Management API")
-api_router = APIRouter(prefix="/api")
-
-# Settings
-class Settings:
-    infoblox_host = os.environ.get('INFOBLOX_HOST', 'localhost')
-    infoblox_username = os.environ.get('INFOBLOX_USERNAME', 'admin')
-    infoblox_password = os.environ.get('INFOBLOX_PASSWORD', 'password')
-    infoblox_api_version = os.environ.get('INFOBLOX_API_VERSION', 'v2.5')
-    dns_view = os.environ.get('DNS_VIEW', 'default')
-    ollama_endpoint = os.environ.get('OLLAMA_ENDPOINT', 'http://localhost:11434')
-
-settings = Settings()
-
 # Pydantic Models
 class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -94,110 +95,86 @@ class ChatResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     sender: str = "assistant"
     data: Optional[Dict[str, Any]] = None
-
-class GoogleSheetsRequest(BaseModel):
-    sheets_url: str
-
-class DNSRecordRequest(BaseModel):
-    fqdn: str
-    ip_address: str
-
-class ClusterRequest(BaseModel):
-    sheets_url: str
-    action: str = "create_cluster"
+    table_data: Optional[List[Dict[str, Any]]] = None
 
 class AgentState(BaseModel):
     messages: List[Dict[str, Any]] = []
+    user_input: str = ""
+    intent: str = ""
+    sheets_url: Optional[str] = None
     sheets_data: Optional[Dict[str, Any]] = None
     cluster_info: Optional[Dict[str, Any]] = None
     dns_records: List[Dict[str, Any]] = []
+    ip_allocations: List[Dict[str, Any]] = []
+    fqdn: Optional[str] = None
+    ip_address: Optional[str] = None
+    subnet: Optional[str] = None
     current_step: str = "initial"
+    response_message: str = ""
+    response_data: Optional[Dict[str, Any]] = None
+    response_table: Optional[List[Dict[str, Any]]] = None
     error: Optional[str] = None
 
-# Infoblox API Helper
-class InfobloxManager:
+# Intent Recognition Agent
+class IntentRecognizer:
     def __init__(self):
-        self.opts = {
-            'host': settings.infoblox_host,
-            'username': settings.infoblox_username,
-            'password': settings.infoblox_password,
-            'wapi_version': settings.infoblox_api_version,
-            'max_retries': 3,
-            'pool_connections': 10
-        }
+        self.model = gemini_model
     
-    def get_connection(self):
-        return connector.Connector(self.opts)
-    
-    async def create_zone(self, zone_name: str, view: str = None):
-        try:
-            conn = self.get_connection()
-            view = view or settings.dns_view
-            
-            # Check if zone exists
-            existing_zones = objects.DNSZone.search(conn, view=view, fqdn=zone_name)
-            if existing_zones:
-                return {"status": "exists", "zone_ref": existing_zones[0]._ref}
-            
-            # Create zone
-            zone = objects.DNSZone.create(conn, view=view, fqdn=zone_name)
-            return {"status": "created", "zone_ref": zone._ref}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Zone creation failed: {str(e)}")
-    
-    async def create_host_record(self, fqdn: str, ip_address: str, view: str = None):
-        try:
-            conn = self.get_connection()
-            view = view or settings.dns_view
-            
-            # Create host record
-            ip_obj = objects.IP.create(ip=ip_address)
-            host_record = objects.HostRecord.create(
-                conn,
-                view=view,
-                name=fqdn,
-                ip=ip_obj
-            )
-            return {"status": "created", "fqdn": fqdn, "ip": ip_address, "record_ref": host_record._ref}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Host record creation failed: {str(e)}")
-
-# OLLAMA LLM Manager
-class OllamaManager:
-    def __init__(self):
-        self.llm = Ollama(base_url=settings.ollama_endpoint, model="llama3.2:latest")
-    
-    async def parse_google_sheets(self, sheets_content: str) -> Dict[str, Any]:
+    async def recognize_intent(self, user_input: str) -> Dict[str, Any]:
+        """Recognize user intent and extract relevant information"""
         prompt = f"""
-        Parse the following Google Sheets content and extract:
-        1. FQDN (Fully Qualified Domain Name)
-        2. Baremetal subnet (CIDR format)
-        3. Node console IPs (list of IP addresses)
-        
-        Content:
-        {sheets_content}
-        
-        Return in JSON format:
+        Analyze the following user input and determine the intent and extract relevant information:
+
+        User Input: "{user_input}"
+
+        Possible intents:
+        1. CREATE_CLUSTER - User wants to create OpenShift cluster from Google Sheets
+        2. CREATE_DNS_RECORD - User wants to create a single DNS record
+        3. PARSE_SHEETS - User wants to parse Google Sheets and get cluster info
+        4. ALLOCATE_IPS - User wants to allocate IPs for nodes from subnet
+        5. GENERAL_CHAT - General conversation or help request
+
+        Extract the following information if present:
+        - google_sheets_url: URL to Google Sheets
+        - fqdn: Fully qualified domain name
+        - ip_address: IP address
+        - subnet: Subnet in CIDR format
+
+        Return a JSON object with:
         {{
-            "fqdn": "domain.example.com",
-            "subnet": "10.0.0.0/16",
-            "node_ips": ["10.8.8.8", "10.8.8.9", "10.8.8.10"]
+            "intent": "intent_name",
+            "google_sheets_url": "url_if_present",
+            "fqdn": "fqdn_if_present",
+            "ip_address": "ip_if_present",
+            "subnet": "subnet_if_present",
+            "confidence": 0.95
         }}
+
+        Only return valid JSON, no additional text.
         """
         
         try:
-            response = await self.llm.ainvoke(prompt)
+            response = await self.model.generate_content_async(prompt)
+            result_text = response.text
+            
             # Extract JSON from response
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
             if json_match:
-                return json.loads(json_match.group())
-            return {"error": "Could not parse JSON from response"}
+                result = json.loads(json_match.group())
+                return result
+            
+            return {"intent": "GENERAL_CHAT", "confidence": 0.5}
         except Exception as e:
-            return {"error": f"OLLAMA parsing failed: {str(e)}"}
+            logging.error(f"Intent recognition error: {str(e)}")
+            return {"intent": "GENERAL_CHAT", "confidence": 0.5}
 
-# Google Sheets Helper
+# Google Sheets Manager
 class GoogleSheetsManager:
+    def __init__(self):
+        self.model = gemini_model
+    
     async def fetch_sheet_data(self, sheets_url: str) -> str:
+        """Fetch data from Google Sheets"""
         try:
             # Convert Google Sheets URL to CSV export URL
             if "docs.google.com/spreadsheets" in sheets_url:
@@ -215,149 +192,353 @@ class GoogleSheetsManager:
                         return f"Error fetching sheet: HTTP {response.status}"
         except Exception as e:
             return f"Error fetching sheet: {str(e)}"
+    
+    async def parse_sheet_data(self, sheet_content: str) -> Dict[str, Any]:
+        """Parse Google Sheets content using Gemini"""
+        prompt = f"""
+        Parse the following Google Sheets CSV content and extract cluster information:
 
-# Initialize managers
-infoblox_manager = InfobloxManager()
-ollama_manager = OllamaManager()
+        CSV Content:
+        {sheet_content}
+
+        Extract the following information:
+        1. FQDN (Fully Qualified Domain Name) - domain for the cluster
+        2. Subnet - network subnet in CIDR format (e.g., 10.0.0.0/16)
+        3. Node Console IPs - list of IP addresses for cluster nodes
+        4. Node Names - names of the nodes if available
+
+        Return a JSON object:
+        {{
+            "fqdn": "cluster.example.com",
+            "subnet": "10.0.0.0/16",
+            "node_ips": ["10.8.8.8", "10.8.8.9", "10.8.8.10"],
+            "node_names": ["node1", "node2", "node3"],
+            "raw_data": "summary of what was found"
+        }}
+
+        Only return valid JSON, no additional text.
+        """
+        
+        try:
+            response = await self.model.generate_content_async(prompt)
+            result_text = response.text
+            
+            # Extract JSON from response
+            json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())
+            
+            return {"error": "Could not parse sheet data"}
+        except Exception as e:
+            return {"error": f"Parsing failed: {str(e)}"}
+
+# IP Allocation Agent
+class IPAllocationAgent:
+    def __init__(self):
+        self.model = gemini_model
+    
+    async def allocate_ips(self, node_ips: List[str], subnet: str, fqdn: str) -> List[Dict[str, Any]]:
+        """Allocate IPs from subnet to nodes"""
+        try:
+            network = ipaddress.ip_network(subnet, strict=False)
+            available_ips = list(network.hosts())
+            
+            allocations = []
+            
+            # Allocate first 3 IPs to master nodes
+            for i in range(min(3, len(node_ips))):
+                allocations.append({
+                    "node_type": "master",
+                    "hostname": f"master-{i:02d}",
+                    "fqdn": f"master-{i:02d}.{fqdn}",
+                    "console_ip": node_ips[i],
+                    "allocated_ip": str(available_ips[i]),
+                    "subnet": subnet
+                })
+            
+            # Allocate remaining IPs to worker nodes
+            for i in range(3, len(node_ips)):
+                worker_index = i - 3
+                allocations.append({
+                    "node_type": "worker",
+                    "hostname": f"worker-{worker_index:02d}",
+                    "fqdn": f"worker-{worker_index:02d}.{fqdn}",
+                    "console_ip": node_ips[i],
+                    "allocated_ip": str(available_ips[i]),
+                    "subnet": subnet
+                })
+            
+            return allocations
+        except Exception as e:
+            return [{"error": f"IP allocation failed: {str(e)}"}]
+
+# DNS Agent (Mock for now)
+class DNSAgent:
+    async def create_dns_record(self, fqdn: str, ip_address: str) -> Dict[str, Any]:
+        """Create individual DNS record"""
+        return {
+            "status": "success",
+            "fqdn": fqdn,
+            "ip_address": ip_address,
+            "record_type": "A",
+            "created_at": datetime.utcnow().isoformat()
+        }
+    
+    async def create_cluster_records(self, allocations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Create DNS records for entire cluster"""
+        records = []
+        for allocation in allocations:
+            if "error" not in allocation:
+                record = await self.create_dns_record(allocation["fqdn"], allocation["allocated_ip"])
+                records.append({
+                    **allocation,
+                    "dns_status": record["status"],
+                    "created_at": record["created_at"]
+                })
+        return records
+
+# Initialize agents
+intent_recognizer = IntentRecognizer()
 sheets_manager = GoogleSheetsManager()
+ip_allocator = IPAllocationAgent()
+dns_agent = DNSAgent()
 
 # LangGraph Agents
-async def sheets_agent(state: AgentState) -> AgentState:
-    """Google Sheets parsing agent"""
+async def intent_recognition_agent(state: AgentState) -> AgentState:
+    """Recognize user intent and extract information"""
     try:
-        last_message = state.messages[-1] if state.messages else {}
-        sheets_url = last_message.get('sheets_url')
+        intent_result = await intent_recognizer.recognize_intent(state.user_input)
         
-        if not sheets_url:
+        state.intent = intent_result.get("intent", "GENERAL_CHAT")
+        state.sheets_url = intent_result.get("google_sheets_url")
+        state.fqdn = intent_result.get("fqdn")
+        state.ip_address = intent_result.get("ip_address")
+        state.subnet = intent_result.get("subnet")
+        state.current_step = "intent_recognized"
+        
+        return state
+    except Exception as e:
+        state.error = f"Intent recognition failed: {str(e)}"
+        return state
+
+async def sheets_parsing_agent(state: AgentState) -> AgentState:
+    """Parse Google Sheets and extract cluster data"""
+    try:
+        if not state.sheets_url:
             state.error = "No Google Sheets URL provided"
             return state
         
         # Fetch sheet data
-        sheet_content = await sheets_manager.fetch_sheet_data(sheets_url)
+        sheet_content = await sheets_manager.fetch_sheet_data(state.sheets_url)
+        if sheet_content.startswith("Error"):
+            state.error = sheet_content
+            return state
         
-        # Parse with OLLAMA
-        parsed_data = await ollama_manager.parse_google_sheets(sheet_content)
+        # Parse sheet data
+        parsed_data = await sheets_manager.parse_sheet_data(sheet_content)
+        if "error" in parsed_data:
+            state.error = parsed_data["error"]
+            return state
         
         state.sheets_data = parsed_data
+        state.fqdn = parsed_data.get("fqdn", state.fqdn)
+        state.subnet = parsed_data.get("subnet", state.subnet)
         state.current_step = "sheets_parsed"
         
         return state
     except Exception as e:
-        state.error = f"Sheets agent error: {str(e)}"
+        state.error = f"Sheets parsing failed: {str(e)}"
         return state
 
-async def dns_agent(state: AgentState) -> AgentState:
-    """DNS management agent"""
+async def ip_allocation_agent(state: AgentState) -> AgentState:
+    """Allocate IPs to nodes"""
     try:
-        if not state.sheets_data:
-            state.error = "No sheets data available for DNS agent"
+        if not state.sheets_data or not state.subnet:
+            state.error = "Missing sheet data or subnet information"
             return state
         
-        fqdn = state.sheets_data.get('fqdn')
-        node_ips = state.sheets_data.get('node_ips', [])
-        
-        if not fqdn or not node_ips:
-            state.error = "Missing FQDN or node IPs in sheets data"
+        node_ips = state.sheets_data.get("node_ips", [])
+        if not node_ips:
+            state.error = "No node IPs found in sheet data"
             return state
         
-        # Create DNS zone
-        zone_result = await infoblox_manager.create_zone(fqdn)
-        
-        # Create DNS records
-        records_created = []
-        
-        # First 3 IPs for master nodes
-        for i in range(min(3, len(node_ips))):
-            master_fqdn = f"master-{i:02d}.{fqdn}"
-            try:
-                record_result = await infoblox_manager.create_host_record(master_fqdn, node_ips[i])
-                records_created.append({
-                    "type": "master",
-                    "hostname": f"master-{i:02d}",
-                    "fqdn": master_fqdn,
-                    "ip": node_ips[i],
-                    "status": "created"
-                })
-            except Exception as e:
-                records_created.append({
-                    "type": "master",
-                    "hostname": f"master-{i:02d}",
-                    "fqdn": master_fqdn,
-                    "ip": node_ips[i],
-                    "status": "failed",
-                    "error": str(e)
-                })
-        
-        # Remaining IPs for worker nodes
-        for i in range(3, len(node_ips)):
-            worker_index = i - 3
-            worker_fqdn = f"worker-{worker_index:02d}.{fqdn}"
-            try:
-                record_result = await infoblox_manager.create_host_record(worker_fqdn, node_ips[i])
-                records_created.append({
-                    "type": "worker",
-                    "hostname": f"worker-{worker_index:02d}",
-                    "fqdn": worker_fqdn,
-                    "ip": node_ips[i],
-                    "status": "created"
-                })
-            except Exception as e:
-                records_created.append({
-                    "type": "worker",
-                    "hostname": f"worker-{worker_index:02d}",
-                    "fqdn": worker_fqdn,
-                    "ip": node_ips[i],
-                    "status": "failed",
-                    "error": str(e)
-                })
-        
-        state.dns_records = records_created
-        state.current_step = "dns_created"
+        # Allocate IPs
+        allocations = await ip_allocator.allocate_ips(node_ips, state.subnet, state.fqdn)
+        state.ip_allocations = allocations
+        state.current_step = "ips_allocated"
         
         return state
     except Exception as e:
-        state.error = f"DNS agent error: {str(e)}"
+        state.error = f"IP allocation failed: {str(e)}"
+        return state
+
+async def dns_creation_agent(state: AgentState) -> AgentState:
+    """Create DNS records"""
+    try:
+        if state.intent == "CREATE_DNS_RECORD":
+            # Single DNS record
+            if not state.fqdn or not state.ip_address:
+                state.error = "Missing FQDN or IP address for DNS record"
+                return state
+            
+            record = await dns_agent.create_dns_record(state.fqdn, state.ip_address)
+            state.dns_records = [record]
+            state.response_message = f"DNS record created successfully!\nFQDN: {state.fqdn}\nIP: {state.ip_address}"
+            
+        elif state.ip_allocations:
+            # Multiple DNS records from IP allocations
+            records = await dns_agent.create_cluster_records(state.ip_allocations)
+            state.dns_records = records
+            state.response_message = f"Created {len(records)} DNS records for OpenShift cluster"
+            
+        state.current_step = "dns_created"
+        return state
+    except Exception as e:
+        state.error = f"DNS creation failed: {str(e)}"
+        return state
+
+async def response_formatter_agent(state: AgentState) -> AgentState:
+    """Format the final response"""
+    try:
+        if state.error:
+            state.response_message = f"❌ Error: {state.error}"
+            return state
+        
+        if state.intent == "CREATE_CLUSTER":
+            state.response_message = f"✅ OpenShift cluster setup completed!\n\n"
+            state.response_message += f"📋 Cluster Details:\n"
+            state.response_message += f"• FQDN: {state.fqdn}\n"
+            state.response_message += f"• Subnet: {state.subnet}\n"
+            state.response_message += f"• Total Nodes: {len(state.ip_allocations)}\n"
+            state.response_message += f"• DNS Records Created: {len(state.dns_records)}\n\n"
+            state.response_message += "📊 Node Details (see table below):"
+            
+            # Prepare table data
+            state.response_table = []
+            for allocation in state.ip_allocations:
+                if "error" not in allocation:
+                    state.response_table.append({
+                        "Node Type": allocation["node_type"].upper(),
+                        "Hostname": allocation["hostname"],
+                        "FQDN": allocation["fqdn"],
+                        "Console IP": allocation["console_ip"],
+                        "Allocated IP": allocation["allocated_ip"],
+                        "Status": "✅ Created"
+                    })
+            
+        elif state.intent == "PARSE_SHEETS":
+            state.response_message = f"📋 Google Sheets Analysis:\n\n"
+            if state.sheets_data:
+                state.response_message += f"• FQDN: {state.sheets_data.get('fqdn', 'Not found')}\n"
+                state.response_message += f"• Subnet: {state.sheets_data.get('subnet', 'Not found')}\n"
+                state.response_message += f"• Node IPs: {len(state.sheets_data.get('node_ips', []))} found\n\n"
+                state.response_message += "📊 Console IPs:\n"
+                for i, ip in enumerate(state.sheets_data.get('node_ips', []), 1):
+                    state.response_message += f"  {i}. {ip}\n"
+        
+        elif state.intent == "ALLOCATE_IPS":
+            state.response_message = f"🔢 IP Allocation completed!\n\n"
+            state.response_message += f"📋 Allocation Details:\n"
+            state.response_message += f"• FQDN: {state.fqdn}\n"
+            state.response_message += f"• Subnet: {state.subnet}\n"
+            state.response_message += f"• Total Nodes: {len(state.ip_allocations)}\n\n"
+            state.response_message += "📊 IP Allocation Table (see below):"
+            
+            # Prepare table data
+            state.response_table = []
+            for allocation in state.ip_allocations:
+                if "error" not in allocation:
+                    state.response_table.append({
+                        "Node Type": allocation["node_type"].upper(),
+                        "Hostname": allocation["hostname"],
+                        "FQDN": allocation["fqdn"],
+                        "Console IP": allocation["console_ip"],
+                        "Allocated IP": allocation["allocated_ip"]
+                    })
+        
+        elif state.intent == "CREATE_DNS_RECORD":
+            # Already handled in dns_creation_agent
+            pass
+        
+        else:
+            state.response_message = """👋 Hello! I'm your OpenShift Cluster Management Assistant.
+
+I can help you with:
+
+🚀 **Create OpenShift Cluster:**
+"Hey, I want to build new openshift cluster, details are at google sheet <link>"
+
+🔧 **Create DNS Record:**
+"Hey, can you create a DNS A record for IP 1.2.3.4 and FQDN is abc.com"
+
+📋 **Parse Google Sheets:**
+"Hey, can you parse google sheet at <link> and provide FQDN and subnet and list console IPs of the nodes"
+
+🔢 **Allocate IPs:**
+"Hey, allocate IPs for all the nodes listed in google sheet <link> with the subnet"
+
+Just type your request and I'll help you manage your OpenShift infrastructure!"""
+        
+        state.current_step = "response_formatted"
+        return state
+    except Exception as e:
+        state.error = f"Response formatting failed: {str(e)}"
+        state.response_message = f"❌ Error: {state.error}"
         return state
 
 # Create LangGraph workflow
 def create_workflow():
     workflow = StateGraph(AgentState)
     
-    workflow.add_node("sheets_agent", sheets_agent)
-    workflow.add_node("dns_agent", dns_agent)
+    # Add nodes
+    workflow.add_node("intent_recognition", intent_recognition_agent)
+    workflow.add_node("sheets_parsing", sheets_parsing_agent)
+    workflow.add_node("ip_allocation", ip_allocation_agent)
+    workflow.add_node("dns_creation", dns_creation_agent)
+    workflow.add_node("response_formatter", response_formatter_agent)
     
-    workflow.add_edge("sheets_agent", "dns_agent")
-    workflow.add_edge("dns_agent", END)
+    # Define conditional edges
+    def route_after_intent(state: AgentState) -> str:
+        if state.intent == "CREATE_CLUSTER":
+            return "sheets_parsing"
+        elif state.intent == "PARSE_SHEETS":
+            return "sheets_parsing"
+        elif state.intent == "ALLOCATE_IPS":
+            return "sheets_parsing"
+        elif state.intent == "CREATE_DNS_RECORD":
+            return "dns_creation"
+        else:
+            return "response_formatter"
     
-    workflow.set_entry_point("sheets_agent")
+    def route_after_sheets(state: AgentState) -> str:
+        if state.intent == "CREATE_CLUSTER":
+            return "ip_allocation"
+        elif state.intent == "ALLOCATE_IPS":
+            return "ip_allocation"
+        else:
+            return "response_formatter"
+    
+    def route_after_ip_allocation(state: AgentState) -> str:
+        if state.intent == "CREATE_CLUSTER":
+            return "dns_creation"
+        else:
+            return "response_formatter"
+    
+    # Add edges
+    workflow.add_edge("intent_recognition", route_after_intent)
+    workflow.add_edge("sheets_parsing", route_after_sheets)
+    workflow.add_edge("ip_allocation", route_after_ip_allocation)
+    workflow.add_edge("dns_creation", "response_formatter")
+    workflow.add_edge("response_formatter", END)
+    
+    workflow.set_entry_point("intent_recognition")
     
     return workflow.compile()
-
-# Connection manager for WebSocket
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-    
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-    
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
-    
-    async def send_message(self, message: str, websocket: WebSocket):
-        await websocket.send_text(message)
-    
-    async def broadcast(self, message: str):
-        for connection in self.active_connections:
-            await connection.send_text(message)
-
-manager = ConnectionManager()
 
 # API Endpoints
 @api_router.post("/chat")
 async def chat_endpoint(message: ChatMessage):
-    """Handle chat messages"""
+    """Handle chat messages with intelligent routing"""
     try:
         # Save user message
         await db.chat_messages.insert_one({
@@ -367,19 +548,24 @@ async def chat_endpoint(message: ChatMessage):
             "sender": message.sender
         })
         
-        # Process message based on content
-        response_message = "I'm your OpenShift cluster management assistant. I can help you:\n\n"
-        response_message += "1. **Create OpenShift cluster DNS records** - Provide a Google Sheets link with cluster info\n"
-        response_message += "2. **Create individual DNS records** - Provide FQDN and IP address\n"
-        response_message += "3. **Parse Google Sheets** - Extract FQDN, subnet, and node IPs\n\n"
-        response_message += "What would you like to do?"
+        # Create workflow
+        workflow = create_workflow()
         
-        if "google.com/spreadsheets" in message.message.lower() or "sheets" in message.message.lower():
-            response_message = "I found a Google Sheets link! I can parse this to extract cluster information and create DNS records. Would you like me to proceed with creating OpenShift cluster DNS records?"
+        # Initialize state
+        initial_state = AgentState(
+            user_input=message.message,
+            messages=[{"role": "user", "content": message.message}]
+        )
         
+        # Execute workflow
+        result = await workflow.ainvoke(initial_state)
+        
+        # Create response
         response = ChatResponse(
-            message=response_message,
-            sender="assistant"
+            message=result.response_message,
+            sender="assistant",
+            data=result.response_data,
+            table_data=result.response_table
         )
         
         # Save assistant response
@@ -387,106 +573,40 @@ async def chat_endpoint(message: ChatMessage):
             "id": response.id,
             "message": response.message,
             "timestamp": response.timestamp,
-            "sender": response.sender
+            "sender": response.sender,
+            "data": serialize_mongo_document(response.data),
+            "table_data": serialize_mongo_document(response.table_data)
         })
+        
+        # Save operation if applicable
+        if result.intent in ["CREATE_CLUSTER", "CREATE_DNS_RECORD", "ALLOCATE_IPS"]:
+            await db.operations.insert_one({
+                "id": str(uuid.uuid4()),
+                "timestamp": datetime.utcnow(),
+                "intent": result.intent,
+                "user_input": message.message,
+                "result": serialize_mongo_document(result.dict()),
+                "status": "success" if not result.error else "failed"
+            })
         
         return response
         
     except Exception as e:
         logger.error(f"Chat processing error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Chat processing failed: {str(e)}")
-
-@api_router.post("/process-cluster")
-async def process_cluster(request: ClusterRequest):
-    """Process OpenShift cluster creation"""
-    try:
-        # For now, let's create a mock workflow since we don't have actual OLLAMA/Infoblox
-        # This will demonstrate the expected functionality
+        error_response = ChatResponse(
+            message=f"❌ Sorry, I encountered an error: {str(e)}",
+            sender="assistant"
+        )
         
-        # Save operation to database
-        operation_record = {
-            "id": str(uuid.uuid4()),
-            "timestamp": datetime.utcnow(),
-            "operation": "cluster_creation",
-            "sheets_url": request.sheets_url,
-            "status": "success",
-            "result": {
-                "sheets_data": {
-                    "fqdn": "cluster.example.com",
-                    "subnet": "10.0.0.0/16",
-                    "node_ips": ["10.8.8.8", "10.8.8.9", "10.8.8.10", "10.8.8.11", "10.8.8.12"]
-                },
-                "dns_records": [
-                    {"type": "master", "hostname": "master-00", "fqdn": "master-00.cluster.example.com", "ip": "10.8.8.8", "status": "created"},
-                    {"type": "master", "hostname": "master-01", "fqdn": "master-01.cluster.example.com", "ip": "10.8.8.9", "status": "created"},
-                    {"type": "master", "hostname": "master-02", "fqdn": "master-02.cluster.example.com", "ip": "10.8.8.10", "status": "created"},
-                    {"type": "worker", "hostname": "worker-00", "fqdn": "worker-00.cluster.example.com", "ip": "10.8.8.11", "status": "created"},
-                    {"type": "worker", "hostname": "worker-01", "fqdn": "worker-01.cluster.example.com", "ip": "10.8.8.12", "status": "created"}
-                ],
-                "current_step": "dns_created"
-            }
-        }
-        
-        await db.cluster_operations.insert_one(operation_record)
-        
-        return {
-            "status": "success",
-            "data": operation_record["result"],
-            "operation_id": operation_record["id"]
-        }
-        
-    except Exception as e:
-        logger.error(f"Cluster processing error: {str(e)}")
-        error_msg = f"Cluster processing failed: {str(e)}"
-        await db.cluster_operations.insert_one({
-            "id": str(uuid.uuid4()),
-            "timestamp": datetime.utcnow(),
-            "operation": "cluster_creation",
-            "sheets_url": request.sheets_url,
-            "error": error_msg,
-            "status": "failed"
-        })
-        raise HTTPException(status_code=500, detail=error_msg)
-
-@api_router.post("/create-dns-record")
-async def create_dns_record(request: DNSRecordRequest):
-    """Create individual DNS record"""
-    try:
-        # For now, create a mock record since we don't have actual Infoblox
-        # This demonstrates the expected functionality
-        
-        # Extract domain from FQDN
-        domain_parts = request.fqdn.split('.')
-        if len(domain_parts) < 2:
-            raise HTTPException(status_code=400, detail="Invalid FQDN format")
-        
-        domain = '.'.join(domain_parts[1:])
-        
-        # Mock zone and record creation
-        zone_result = {"status": "created", "zone_ref": f"zone/{domain}"}
-        record_result = {"status": "created", "fqdn": request.fqdn, "ip": request.ip_address}
-        
-        # Save to database
-        await db.dns_records.insert_one({
-            "id": str(uuid.uuid4()),
-            "timestamp": datetime.utcnow(),
-            "fqdn": request.fqdn,
-            "ip_address": request.ip_address,
-            "zone_result": zone_result,
-            "record_result": record_result
+        # Save error response
+        await db.chat_messages.insert_one({
+            "id": error_response.id,
+            "message": error_response.message,
+            "timestamp": error_response.timestamp,
+            "sender": error_response.sender
         })
         
-        return {
-            "status": "success",
-            "fqdn": request.fqdn,
-            "ip_address": request.ip_address,
-            "zone_status": zone_result["status"],
-            "record_status": record_result["status"]
-        }
-        
-    except Exception as e:
-        logger.error(f"DNS record creation error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"DNS record creation failed: {str(e)}")
+        return error_response
 
 @api_router.get("/chat-history")
 async def get_chat_history():
@@ -503,37 +623,13 @@ async def get_chat_history():
 async def get_operations():
     """Get operation history"""
     try:
-        operations = await db.cluster_operations.find().sort("timestamp", -1).to_list(50)
+        operations = await db.operations.find().sort("timestamp", -1).to_list(50)
         serialized_operations = serialize_mongo_document(operations)
         return {"operations": serialized_operations}
     except Exception as e:
         logger.error(f"Operations error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch operations: {str(e)}")
 
-@api_router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time communication"""
-    await manager.connect(websocket)
-    try:
-        while True:
-            data = await websocket.receive_text()
-            message_data = json.loads(data)
-            
-            # Process message
-            if message_data.get("type") == "chat":
-                # Echo back for now
-                await manager.send_message(
-                    json.dumps({
-                        "type": "response",
-                        "message": f"Received: {message_data.get('message')}"
-                    }),
-                    websocket
-                )
-            
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-
-# Health check
 @api_router.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -542,8 +638,8 @@ async def health_check():
         "timestamp": datetime.utcnow(),
         "services": {
             "mongodb": "connected",
-            "infoblox": "configured",
-            "ollama": "configured"
+            "google_gemini": "configured",
+            "infoblox": "configured"
         }
     }
 
