@@ -21,6 +21,78 @@ import './App.css';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
+const WorkflowProgress = ({ progress }) => {
+  if (!progress || progress.length === 0) return null;
+
+  const getStatusIcon = (status) => {
+    switch (status) {
+      case 'completed':
+        return <CheckCircleIcon className="h-4 w-4 text-green-500" />;
+      case 'failed':
+        return <XCircleIcon className="h-4 w-4 text-red-500" />;
+      case 'started':
+        return <PlayIcon className="h-4 w-4 text-blue-500" />;
+      default:
+        return <ClockIcon className="h-4 w-4 text-gray-400" />;
+    }
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'completed':
+        return 'bg-green-50 border-green-200';
+      case 'failed':
+        return 'bg-red-50 border-red-200';
+      case 'started':
+        return 'bg-blue-50 border-blue-200';
+      default:
+        return 'bg-gray-50 border-gray-200';
+    }
+  };
+
+  return (
+    <div className="mt-4 bg-gray-50 rounded-lg p-4">
+      <div className="flex items-center mb-3">
+        <CogIcon className="h-5 w-5 text-gray-600 mr-2" />
+        <h4 className="text-sm font-medium text-gray-800">Workflow Progress</h4>
+      </div>
+      
+      <div className="space-y-2">
+        {progress.map((step, index) => (
+          <div key={index} className={`p-3 rounded-md border ${getStatusColor(step.status)}`}>
+            <div className="flex items-start justify-between">
+              <div className="flex items-start space-x-3">
+                {getStatusIcon(step.status)}
+                <div>
+                  <div className="text-sm font-medium text-gray-800">
+                    {step.agent}
+                  </div>
+                  <div className="text-xs text-gray-600 mt-1">
+                    {step.message}
+                  </div>
+                  {step.details && Object.keys(step.details).length > 0 && (
+                    <div className="mt-2 text-xs text-gray-500">
+                      {Object.entries(step.details).map(([key, value]) => (
+                        <div key={key} className="flex">
+                          <span className="font-medium mr-1">{key}:</span>
+                          <span>{typeof value === 'object' ? JSON.stringify(value) : value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="text-xs text-gray-400">
+                {new Date(step.timestamp).toLocaleTimeString()}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const ChatMessage = ({ message, isUser }) => (
   <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-6`}>
     <div className={`max-w-4xl px-6 py-4 rounded-lg ${
