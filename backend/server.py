@@ -493,8 +493,10 @@ async def get_chat_history():
     """Get chat history"""
     try:
         messages = await db.chat_messages.find().sort("timestamp", 1).to_list(100)
-        return {"messages": messages}
+        serialized_messages = serialize_mongo_document(messages)
+        return {"messages": serialized_messages}
     except Exception as e:
+        logger.error(f"Chat history error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch chat history: {str(e)}")
 
 @api_router.get("/operations")
@@ -502,8 +504,10 @@ async def get_operations():
     """Get operation history"""
     try:
         operations = await db.cluster_operations.find().sort("timestamp", -1).to_list(50)
-        return {"operations": operations}
+        serialized_operations = serialize_mongo_document(operations)
+        return {"operations": serialized_operations}
     except Exception as e:
+        logger.error(f"Operations error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch operations: {str(e)}")
 
 @api_router.websocket("/ws")
