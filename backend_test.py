@@ -126,11 +126,25 @@ class OpenShiftClusterManagerAPITester:
             "Allocate IPs"
         )
 
-    def test_create_cluster(self):
-        """Test creating an OpenShift cluster via chat"""
+    def test_workflow_progress_dns_record(self):
+        """Test workflow progress for DNS record creation"""
+        return self.test_chat(
+            "Hey, can you create a DNS A record for IP 10.20.30.40 and FQDN is workflow-test.example.com",
+            "Workflow Progress - DNS Record"
+        )
+        
+    def test_workflow_progress_sheets_parsing(self):
+        """Test workflow progress for Google Sheets parsing"""
+        return self.test_chat(
+            f"Hey, can you parse google sheet at {self.test_sheet_url} and provide FQDN and subnet and list console IPs",
+            "Workflow Progress - Sheets Parsing"
+        )
+        
+    def test_workflow_progress_cluster_creation(self):
+        """Test workflow progress for full cluster creation"""
         return self.test_chat(
             f"Hey, I want to build new openshift cluster, details are at google sheet {self.test_sheet_url}",
-            "Create OpenShift Cluster"
+            "Workflow Progress - Cluster Creation"
         )
 
     def print_summary(self):
