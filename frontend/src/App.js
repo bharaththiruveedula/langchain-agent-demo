@@ -11,7 +11,10 @@ import {
   ClockIcon,
   SparklesIcon,
   DocumentTextIcon,
-  TableCellsIcon
+  TableCellsIcon,
+  PlayIcon,
+  PauseIcon,
+  XCircleIcon
 } from '@heroicons/react/24/outline';
 import './App.css';
 
