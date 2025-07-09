@@ -608,14 +608,14 @@ async def chat_endpoint(message: ChatMessage):
         })
         
         # Save operation if applicable
-        if result.intent in ["CREATE_CLUSTER", "CREATE_DNS_RECORD", "ALLOCATE_IPS"]:
+        if final_state.intent in ["CREATE_CLUSTER", "CREATE_DNS_RECORD", "ALLOCATE_IPS"]:
             await db.operations.insert_one({
                 "id": str(uuid.uuid4()),
                 "timestamp": datetime.utcnow(),
-                "intent": result.intent,
+                "intent": final_state.intent,
                 "user_input": message.message,
-                "result": serialize_mongo_document(result.dict()),
-                "status": "success" if not result.error else "failed"
+                "result": serialize_mongo_document(final_state.dict()),
+                "status": "success" if not final_state.error else "failed"
             })
         
         return response
