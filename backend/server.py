@@ -586,12 +586,15 @@ async def chat_endpoint(message: ChatMessage):
         # Execute workflow
         result = await workflow.ainvoke(initial_state)
         
+        # The result is the final state from the workflow
+        final_state = result
+        
         # Create response
         response = ChatResponse(
-            message=result.response_message if hasattr(result, 'response_message') else "Response generated successfully",
+            message=final_state.response_message if final_state.response_message else "Response generated successfully",
             sender="assistant",
-            data=result.response_data if hasattr(result, 'response_data') else None,
-            table_data=result.response_table if hasattr(result, 'response_table') else None
+            data=final_state.response_data if final_state.response_data else None,
+            table_data=final_state.response_table if final_state.response_table else None
         )
         
         # Save assistant response
