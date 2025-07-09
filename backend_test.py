@@ -10,6 +10,7 @@ class OpenShiftClusterManagerAPITester:
         self.tests_run = 0
         self.tests_passed = 0
         self.test_results = []
+        self.test_sheet_url = "https://docs.google.com/spreadsheets/d/1BzoO69YV0oI1aAOFYcXPxetvO7d3XbGmomXcr9OL-yc/edit?usp=sharing"
 
     def run_test(self, name, method, endpoint, expected_status, data=None):
         """Run a single API test"""
@@ -64,10 +65,10 @@ class OpenShiftClusterManagerAPITester:
             200
         )
 
-    def test_chat(self, message):
-        """Test the chat endpoint"""
+    def test_chat(self, message, test_name="Chat Endpoint"):
+        """Test the chat endpoint with a specific message"""
         return self.run_test(
-            "Chat Endpoint",
+            test_name,
             "POST",
             "chat",
             200,
@@ -97,30 +98,39 @@ class OpenShiftClusterManagerAPITester:
             200
         )
 
-    def test_create_dns_record(self, fqdn, ip_address):
-        """Test creating a DNS record"""
-        return self.run_test(
-            "Create DNS Record",
-            "POST",
-            "create-dns-record",
-            200,
-            data={
-                "fqdn": fqdn,
-                "ip_address": ip_address
-            }
+    def test_general_chat(self):
+        """Test general chat functionality"""
+        return self.test_chat(
+            "Hello, what can you help me with?",
+            "General Chat"
         )
 
-    def test_process_cluster(self, sheets_url):
-        """Test processing a cluster from Google Sheets"""
-        return self.run_test(
-            "Process Cluster",
-            "POST",
-            "process-cluster",
-            200,
-            data={
-                "sheets_url": sheets_url,
-                "action": "create_cluster"
-            }
+    def test_create_dns_record(self):
+        """Test creating a DNS record via chat"""
+        return self.test_chat(
+            "Hey, can you create a DNS A record for IP 1.2.3.4 and FQDN is test.example.com",
+            "Create DNS Record"
+        )
+
+    def test_parse_sheets(self):
+        """Test parsing Google Sheets via chat"""
+        return self.test_chat(
+            f"Hey, can you parse google sheet at {self.test_sheet_url} and provide FQDN and subnet and list console IPs of the nodes",
+            "Parse Google Sheets"
+        )
+
+    def test_allocate_ips(self):
+        """Test allocating IPs via chat"""
+        return self.test_chat(
+            f"Hey, allocate IPs for all the nodes listed in google sheet {self.test_sheet_url} with the subnet",
+            "Allocate IPs"
+        )
+
+    def test_create_cluster(self):
+        """Test creating an OpenShift cluster via chat"""
+        return self.test_chat(
+            f"Hey, I want to build new openshift cluster, details are at google sheet {self.test_sheet_url}",
+            "Create OpenShift Cluster"
         )
 
     def print_summary(self):
@@ -135,6 +145,29 @@ class OpenShiftClusterManagerAPITester:
         
         return self.tests_passed == self.tests_run
 
+    def analyze_response(self, response_data, test_name):
+        """Analyze the response data for specific test cases"""
+        if not response_data:
+            print(f"⚠️ No response data for {test_name}")
+            return
+            
+        print(f"\n📋 Response Analysis for {test_name}:")
+        
+        # Check for message content
+        if 'message' in response_data:
+            print(f"Message: {response_data['message'][:150]}...")
+        
+        # Check for table data
+        if 'table_data' in response_data and response_data['table_data']:
+            print(f"Table data present with {len(response_data['table_data'])} rows")
+            # Print first row as sample
+            if len(response_data['table_data']) > 0:
+                print(f"Sample row: {json.dumps(response_data['table_data'][0], indent=2)}")
+        elif 'table_data' in response_data:
+            print("Table data field present but empty")
+        else:
+            print("No table data in response")
+
 class TestOpenShiftClusterManager(unittest.TestCase):
     def setUp(self):
         self.tester = OpenShiftClusterManagerAPITester()
@@ -144,9 +177,9 @@ class TestOpenShiftClusterManager(unittest.TestCase):
         success, health_data = self.tester.test_health_check()
         self.assertTrue(success, "Health check should succeed")
         
-        # Test chat endpoint
-        success, chat_data = self.tester.test_chat("Hello, I need help with OpenShift cluster management")
-        self.assertTrue(success, "Chat endpoint should succeed")
+        # Test general chat
+        success, chat_data = self.tester.test_general_chat()
+        self.assertTrue(success, "General chat should succeed")
         
         # Test chat history
         success, history_data = self.tester.test_chat_history()
@@ -157,13 +190,20 @@ class TestOpenShiftClusterManager(unittest.TestCase):
         self.assertTrue(success, "Operations endpoint should succeed")
         
         # Test DNS record creation
-        test_fqdn = f"test-node-{datetime.now().strftime('%H%M%S')}.example.com"
-        success, dns_data = self.tester.test_create_dns_record(test_fqdn, "192.168.1.100")
+        success, dns_data = self.tester.test_create_dns_record()
+        self.assertTrue(success, "DNS record creation should succeed")
         
-        # Test Google Sheets processing
-        # Using a sample Google Sheets URL
-        sample_sheets_url = "https://docs.google.com/spreadsheets/d/1234567890abcdefghijklmnopqrstuvwxyz/edit"
-        success, sheets_data = self.tester.test_process_cluster(sample_sheets_url)
+        # Test Google Sheets parsing
+        success, sheets_data = self.tester.test_parse_sheets()
+        self.assertTrue(success, "Google Sheets parsing should succeed")
+        
+        # Test IP allocation
+        success, ip_data = self.tester.test_allocate_ips()
+        self.assertTrue(success, "IP allocation should succeed")
+        
+        # Test cluster creation
+        success, cluster_data = self.tester.test_create_cluster()
+        self.assertTrue(success, "Cluster creation should succeed")
         
         # Print summary
         self.tester.print_summary()
@@ -173,25 +213,33 @@ def main():
     tester = OpenShiftClusterManagerAPITester()
     
     # Test health check
-    tester.test_health_check()
+    success, health_data = tester.test_health_check()
     
-    # Test chat endpoint
-    tester.test_chat("Hello, I need help with OpenShift cluster management")
+    # Test general chat
+    success, chat_data = tester.test_general_chat()
+    tester.analyze_response(chat_data, "General Chat")
     
     # Test chat history
-    tester.test_chat_history()
+    success, history_data = tester.test_chat_history()
     
     # Test operations history
-    tester.test_operations()
+    success, operations_data = tester.test_operations()
     
     # Test DNS record creation
-    test_fqdn = f"test-node-{datetime.now().strftime('%H%M%S')}.example.com"
-    tester.test_create_dns_record(test_fqdn, "192.168.1.100")
+    success, dns_data = tester.test_create_dns_record()
+    tester.analyze_response(dns_data, "Create DNS Record")
     
-    # Test Google Sheets processing
-    # Using a sample Google Sheets URL
-    sample_sheets_url = "https://docs.google.com/spreadsheets/d/1234567890abcdefghijklmnopqrstuvwxyz/edit"
-    tester.test_process_cluster(sample_sheets_url)
+    # Test Google Sheets parsing
+    success, sheets_data = tester.test_parse_sheets()
+    tester.analyze_response(sheets_data, "Parse Google Sheets")
+    
+    # Test IP allocation
+    success, ip_data = tester.test_allocate_ips()
+    tester.analyze_response(ip_data, "Allocate IPs")
+    
+    # Test cluster creation
+    success, cluster_data = tester.test_create_cluster()
+    tester.analyze_response(cluster_data, "Create OpenShift Cluster")
     
     # Print summary
     success = tester.print_summary()
