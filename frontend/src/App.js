@@ -108,6 +108,12 @@ const ChatMessage = ({ message, isUser }) => (
         )}
         <div className="flex-1">
           <p className="text-sm whitespace-pre-line leading-relaxed">{message.message}</p>
+          
+          {/* Show workflow progress for assistant messages */}
+          {!isUser && message.workflow_progress && (
+            <WorkflowProgress progress={message.workflow_progress} />
+          )}
+          
           {message.table_data && message.table_data.length > 0 && (
             <div className="mt-4 overflow-x-auto">
               <table className="min-w-full bg-white border border-gray-200 rounded-lg">
