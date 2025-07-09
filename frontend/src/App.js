@@ -218,9 +218,9 @@ const WelcomeMessage = () => (
   </div>
 );
 
-const TypingIndicator = () => (
+const TypingIndicator = ({ currentAgent }) => (
   <div className="flex justify-start mb-6">
-    <div className="bg-gray-100 px-6 py-4 rounded-lg">
+    <div className="bg-gray-100 px-6 py-4 rounded-lg max-w-md">
       <div className="flex items-center space-x-2">
         <SparklesIcon className="h-5 w-5 text-blue-500" />
         <div className="flex space-x-1">
@@ -228,7 +228,14 @@ const TypingIndicator = () => (
           <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
           <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
         </div>
-        <span className="text-sm text-gray-600">Processing your request...</span>
+        <div className="flex flex-col">
+          <span className="text-sm text-gray-600">Processing your request...</span>
+          {currentAgent && (
+            <span className="text-xs text-blue-600 font-medium">
+              🤖 {currentAgent} is working
+            </span>
+          )}
+        </div>
       </div>
     </div>
   </div>
