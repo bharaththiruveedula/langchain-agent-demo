@@ -217,6 +217,8 @@ domain.abc.com,10.0.0.0/16,10.8.8.8,10.8.8.9,10.8.8.10,10.8.8.11,10.8.8.12,10.8.
     
     async def parse_sheet_data(self, sheet_content: str) -> Dict[str, Any]:
         """Parse Google Sheets content using Gemini"""
+        print(f"Parsing sheet content: {sheet_content[:200]}...")
+        
         prompt = f"""
         Parse the following Google Sheets CSV content and extract cluster information:
 
@@ -244,14 +246,18 @@ domain.abc.com,10.0.0.0/16,10.8.8.8,10.8.8.9,10.8.8.10,10.8.8.11,10.8.8.12,10.8.
         try:
             response = await self.model.generate_content_async(prompt)
             result_text = response.text
+            print(f"Gemini response: {result_text}")
             
             # Extract JSON from response
             json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
             if json_match:
-                return json.loads(json_match.group())
+                parsed_result = json.loads(json_match.group())
+                print(f"Parsed result: {parsed_result}")
+                return parsed_result
             
             return {"error": "Could not parse sheet data"}
         except Exception as e:
+            print(f"Exception in parse_sheet_data: {str(e)}")
             return {"error": f"Parsing failed: {str(e)}"}
 
 # IP Allocation Agent
