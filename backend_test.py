@@ -157,9 +157,44 @@ class OpenShiftClusterManagerAPITester:
         if 'message' in response_data:
             print(f"Message: {response_data['message'][:150]}...")
         
+        # Check for workflow progress
+        if 'workflow_progress' in response_data and response_data['workflow_progress']:
+            progress_steps = response_data['workflow_progress']
+            print(f"✅ Workflow progress present with {len(progress_steps)} steps")
+            
+            # Print workflow progress details
+            for i, step in enumerate(progress_steps):
+                status_icon = "✅" if step.get("status") == "completed" else "⏳" if step.get("status") == "started" else "❌"
+                print(f"  {status_icon} Step {i+1}: {step.get('agent', 'Unknown')} - {step.get('status', 'Unknown')}")
+                print(f"    Message: {step.get('message', 'No message')}")
+                print(f"    Timestamp: {step.get('timestamp', 'No timestamp')}")
+                if step.get('details'):
+                    print(f"    Details: {json.dumps(step.get('details'), indent=2)[:100]}...")
+                print()
+        elif 'workflow_progress' in response_data:
+            print("❌ Workflow progress field present but empty")
+        else:
+            print("❌ No workflow progress in response")
+            
+        # Check for current agent
+        if 'current_agent' in response_data and response_data['current_agent']:
+            print(f"✅ Current agent: {response_data['current_agent']}")
+        elif 'current_agent' in response_data:
+            print("❌ Current agent field present but empty")
+        else:
+            print("❌ No current agent in response")
+            
+        # Check for processing status
+        if 'processing_status' in response_data and response_data['processing_status']:
+            print(f"✅ Processing status: {response_data['processing_status']}")
+        elif 'processing_status' in response_data:
+            print("❌ Processing status field present but empty")
+        else:
+            print("❌ No processing status in response")
+        
         # Check for table data
         if 'table_data' in response_data and response_data['table_data']:
-            print(f"Table data present with {len(response_data['table_data'])} rows")
+            print(f"✅ Table data present with {len(response_data['table_data'])} rows")
             # Print first row as sample
             if len(response_data['table_data']) > 0:
                 print(f"Sample row: {json.dumps(response_data['table_data'][0], indent=2)}")
