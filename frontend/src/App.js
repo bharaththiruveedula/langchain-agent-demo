@@ -355,7 +355,7 @@ const ChatInterface = () => {
               ))
             )}
             
-            {loading && <TypingIndicator />}
+            {loading && <TypingIndicator currentAgent={currentAgent} />}
             <div ref={messagesEndRef} />
           </div>
 
