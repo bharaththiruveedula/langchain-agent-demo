@@ -305,6 +305,7 @@ const ChatInterface = () => {
       setMessages(prev => [...prev, errorMessage]);
     } finally {
       setLoading(false);
+      setCurrentAgent('');
       setInputMessage('');
     }
   };
