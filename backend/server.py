@@ -497,8 +497,8 @@ def create_workflow():
     workflow.add_node("dns_creation", dns_creation_agent)
     workflow.add_node("response_formatter", response_formatter_agent)
     
-    # Define conditional edges
-    def route_after_intent(state: AgentState) -> str:
+    # Define conditional routing logic
+    def route_after_intent(state: AgentState):
         if state.intent == "CREATE_CLUSTER":
             return "sheets_parsing"
         elif state.intent == "PARSE_SHEETS":
@@ -510,7 +510,7 @@ def create_workflow():
         else:
             return "response_formatter"
     
-    def route_after_sheets(state: AgentState) -> str:
+    def route_after_sheets(state: AgentState):
         if state.intent == "CREATE_CLUSTER":
             return "ip_allocation"
         elif state.intent == "ALLOCATE_IPS":
@@ -518,16 +518,42 @@ def create_workflow():
         else:
             return "response_formatter"
     
-    def route_after_ip_allocation(state: AgentState) -> str:
+    def route_after_ip_allocation(state: AgentState):
         if state.intent == "CREATE_CLUSTER":
             return "dns_creation"
         else:
             return "response_formatter"
     
-    # Add edges
-    workflow.add_edge("intent_recognition", route_after_intent)
-    workflow.add_edge("sheets_parsing", route_after_sheets)
-    workflow.add_edge("ip_allocation", route_after_ip_allocation)
+    # Add conditional edges
+    workflow.add_conditional_edges(
+        "intent_recognition",
+        route_after_intent,
+        {
+            "sheets_parsing": "sheets_parsing",
+            "dns_creation": "dns_creation", 
+            "response_formatter": "response_formatter"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "sheets_parsing",
+        route_after_sheets,
+        {
+            "ip_allocation": "ip_allocation",
+            "response_formatter": "response_formatter"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "ip_allocation", 
+        route_after_ip_allocation,
+        {
+            "dns_creation": "dns_creation",
+            "response_formatter": "response_formatter"
+        }
+    )
+    
+    # Add regular edges
     workflow.add_edge("dns_creation", "response_formatter")
     workflow.add_edge("response_formatter", END)
     
