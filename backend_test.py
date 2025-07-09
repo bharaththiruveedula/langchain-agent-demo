@@ -264,31 +264,22 @@ def main():
     # Test health check
     success, health_data = tester.test_health_check()
     
-    # Test general chat
-    success, chat_data = tester.test_general_chat()
-    tester.analyze_response(chat_data, "General Chat")
+    # Test workflow progress features
+    print("\n" + "="*50)
+    print("TESTING WORKFLOW PROGRESS FEATURES")
+    print("="*50)
     
-    # Test chat history
-    success, history_data = tester.test_chat_history()
+    # Test DNS record creation with workflow progress
+    success, dns_data = tester.test_workflow_progress_dns_record()
+    tester.analyze_response(dns_data, "Workflow Progress - DNS Record")
     
-    # Test operations history
-    success, operations_data = tester.test_operations()
+    # Test Google Sheets parsing with workflow progress
+    success, sheets_data = tester.test_workflow_progress_sheets_parsing()
+    tester.analyze_response(sheets_data, "Workflow Progress - Sheets Parsing")
     
-    # Test DNS record creation
-    success, dns_data = tester.test_create_dns_record()
-    tester.analyze_response(dns_data, "Create DNS Record")
-    
-    # Test Google Sheets parsing
-    success, sheets_data = tester.test_parse_sheets()
-    tester.analyze_response(sheets_data, "Parse Google Sheets")
-    
-    # Test IP allocation
-    success, ip_data = tester.test_allocate_ips()
-    tester.analyze_response(ip_data, "Allocate IPs")
-    
-    # Test cluster creation
-    success, cluster_data = tester.test_create_cluster()
-    tester.analyze_response(cluster_data, "Create OpenShift Cluster")
+    # Test cluster creation with workflow progress
+    success, cluster_data = tester.test_workflow_progress_cluster_creation()
+    tester.analyze_response(cluster_data, "Workflow Progress - Cluster Creation")
     
     # Print summary
     success = tester.print_summary()
