@@ -287,7 +287,14 @@ const ChatInterface = () => {
 
     try {
       const response = await axios.post(`${API}/chat`, userMessage);
-      setMessages(prev => [...prev, response.data]);
+      const assistantMessage = response.data;
+      
+      // Update current agent from the response
+      if (assistantMessage.current_agent) {
+        setCurrentAgent(assistantMessage.current_agent);
+      }
+      
+      setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
       const errorMessage = {
         id: uuidv4(),
