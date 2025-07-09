@@ -351,6 +351,8 @@ dns_agent = DNSAgent()
 async def intent_recognition_agent(state: AgentState) -> AgentState:
     """Recognize user intent and extract information"""
     try:
+        state.add_progress_step("Intent Recognition Agent", "started", "Analyzing user input to determine intent...")
+        
         intent_result = await intent_recognizer.recognize_intent(state.user_input)
         
         state.intent = intent_result.get("intent", "GENERAL_CHAT")
@@ -360,9 +362,14 @@ async def intent_recognition_agent(state: AgentState) -> AgentState:
         state.subnet = intent_result.get("subnet")
         state.current_step = "intent_recognized"
         
+        state.add_progress_step("Intent Recognition Agent", "completed", 
+                              f"Intent recognized: {state.intent}", 
+                              {"intent": state.intent, "confidence": intent_result.get("confidence", 0.9)})
+        
         return state
     except Exception as e:
         state.error = f"Intent recognition failed: {str(e)}"
+        state.add_progress_step("Intent Recognition Agent", "failed", f"Error: {str(e)}")
         return state
 
 async def sheets_parsing_agent(state: AgentState) -> AgentState:
