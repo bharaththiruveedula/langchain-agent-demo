@@ -116,7 +116,20 @@ class AgentState(BaseModel):
     response_message: str = ""
     response_data: Optional[Dict[str, Any]] = None
     response_table: Optional[List[Dict[str, Any]]] = None
+    workflow_progress: List[Dict[str, Any]] = []
+    current_agent: str = ""
     error: Optional[str] = None
+
+    def add_progress_step(self, agent_name: str, status: str, message: str, details: Optional[Dict[str, Any]] = None):
+        """Add a progress step to the workflow"""
+        self.workflow_progress.append({
+            "agent": agent_name,
+            "status": status,  # "started", "completed", "failed"
+            "message": message,
+            "timestamp": datetime.utcnow().isoformat(),
+            "details": details or {}
+        })
+        self.current_agent = agent_name
 
 # Intent Recognition Agent
 class IntentRecognizer:
