@@ -460,26 +460,44 @@ async def ip_allocation_agent(state: AgentState) -> AgentState:
 async def dns_creation_agent(state: AgentState) -> AgentState:
     """Create DNS records"""
     try:
+        state.add_progress_step("DNS Creation Agent", "started", "Initializing DNS record creation...")
+        
         if state.intent == "CREATE_DNS_RECORD":
             # Single DNS record
             if not state.fqdn or not state.ip_address:
                 state.error = "Missing FQDN or IP address for DNS record"
+                state.add_progress_step("DNS Creation Agent", "failed", "Missing FQDN or IP address")
                 return state
+            
+            state.add_progress_step("DNS Creation Agent", "started", 
+                                  f"Creating DNS record: {state.fqdn} → {state.ip_address}")
             
             record = await dns_agent.create_dns_record(state.fqdn, state.ip_address)
             state.dns_records = [record]
             state.response_message = f"DNS record created successfully!\nFQDN: {state.fqdn}\nIP: {state.ip_address}"
             
+            state.add_progress_step("DNS Creation Agent", "completed", 
+                                  "Successfully created DNS record",
+                                  {"fqdn": state.fqdn, "ip_address": state.ip_address})
+            
         elif state.ip_allocations:
             # Multiple DNS records from IP allocations
+            state.add_progress_step("DNS Creation Agent", "started", 
+                                  f"Creating DNS records for {len(state.ip_allocations)} nodes")
+            
             records = await dns_agent.create_cluster_records(state.ip_allocations)
             state.dns_records = records
             state.response_message = f"Created {len(records)} DNS records for OpenShift cluster"
+            
+            state.add_progress_step("DNS Creation Agent", "completed", 
+                                  f"Successfully created {len(records)} DNS records",
+                                  {"total_records": len(records), "cluster_fqdn": state.fqdn})
             
         state.current_step = "dns_created"
         return state
     except Exception as e:
         state.error = f"DNS creation failed: {str(e)}"
+        state.add_progress_step("DNS Creation Agent", "failed", f"Error: {str(e)}")
         return state
 
 async def response_formatter_agent(state: AgentState) -> AgentState:
