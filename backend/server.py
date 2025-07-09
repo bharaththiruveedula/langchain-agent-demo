@@ -375,20 +375,32 @@ async def intent_recognition_agent(state: AgentState) -> AgentState:
 async def sheets_parsing_agent(state: AgentState) -> AgentState:
     """Parse Google Sheets and extract cluster data"""
     try:
+        state.add_progress_step("Google Sheets Agent", "started", "Connecting to Google Sheets...")
+        
         if not state.sheets_url:
             state.error = "No Google Sheets URL provided"
+            state.add_progress_step("Google Sheets Agent", "failed", "No Google Sheets URL provided")
             return state
         
         # Fetch sheet data
+        state.add_progress_step("Google Sheets Agent", "started", "Fetching data from Google Sheets...")
         sheet_content = await sheets_manager.fetch_sheet_data(state.sheets_url)
+        
         if sheet_content.startswith("Error"):
             state.error = sheet_content
+            state.add_progress_step("Google Sheets Agent", "failed", sheet_content)
             return state
         
+        state.add_progress_step("Google Sheets Agent", "completed", "Successfully fetched sheet data", 
+                              {"content_preview": sheet_content[:100] + "..."})
+        
         # Parse sheet data
+        state.add_progress_step("Google Sheets Agent", "started", "Parsing sheet content with Google Gemini...")
         parsed_data = await sheets_manager.parse_sheet_data(sheet_content)
+        
         if "error" in parsed_data:
             state.error = parsed_data["error"]
+            state.add_progress_step("Google Sheets Agent", "failed", parsed_data["error"])
             return state
         
         state.sheets_data = parsed_data
@@ -396,9 +408,15 @@ async def sheets_parsing_agent(state: AgentState) -> AgentState:
         state.subnet = parsed_data.get("subnet", state.subnet)
         state.current_step = "sheets_parsed"
         
+        state.add_progress_step("Google Sheets Agent", "completed", 
+                              f"Successfully parsed sheet data", 
+                              {"fqdn": state.fqdn, "subnet": state.subnet, 
+                               "node_count": len(parsed_data.get("node_ips", []))})
+        
         return state
     except Exception as e:
         state.error = f"Sheets parsing failed: {str(e)}"
+        state.add_progress_step("Google Sheets Agent", "failed", f"Error: {str(e)}")
         return state
 
 async def ip_allocation_agent(state: AgentState) -> AgentState:
