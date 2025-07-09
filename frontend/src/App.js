@@ -178,6 +178,7 @@ const ChatInterface = () => {
       setMessages(history);
     } catch (error) {
       console.error('Error loading chat history:', error);
+      // Don't show error messages, just keep empty state
     }
   };
 
