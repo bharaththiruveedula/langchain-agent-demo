@@ -393,6 +393,7 @@ async def chat_endpoint(message: ChatMessage):
         return response
         
     except Exception as e:
+        logger.error(f"Chat processing error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Chat processing failed: {str(e)}")
 
 @api_router.post("/process-cluster")
