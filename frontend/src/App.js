@@ -245,6 +245,7 @@ const ChatInterface = () => {
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [currentAgent, setCurrentAgent] = useState('');
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
