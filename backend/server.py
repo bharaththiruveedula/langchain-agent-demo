@@ -586,8 +586,8 @@ async def chat_endpoint(message: ChatMessage):
         # Execute workflow
         result = await workflow.ainvoke(initial_state)
         
-        # The result is the final state from the workflow
-        final_state = result
+        # The result is a dictionary with the final state
+        final_state = AgentState(**result) if isinstance(result, dict) else result
         
         # Create response
         response = ChatResponse(
