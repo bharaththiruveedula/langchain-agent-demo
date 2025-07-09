@@ -96,6 +96,9 @@ class ChatResponse(BaseModel):
     sender: str = "assistant"
     data: Optional[Dict[str, Any]] = None
     table_data: Optional[List[Dict[str, Any]]] = None
+    workflow_progress: Optional[List[Dict[str, Any]]] = None
+    current_agent: Optional[str] = None
+    processing_status: Optional[str] = None
 
 class AgentState(BaseModel):
     messages: List[Dict[str, Any]] = []
