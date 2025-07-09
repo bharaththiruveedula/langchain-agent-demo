@@ -422,23 +422,39 @@ async def sheets_parsing_agent(state: AgentState) -> AgentState:
 async def ip_allocation_agent(state: AgentState) -> AgentState:
     """Allocate IPs to nodes"""
     try:
+        state.add_progress_step("IP Allocation Agent", "started", "Starting IP allocation process...")
+        
         if not state.sheets_data or not state.subnet:
             state.error = "Missing sheet data or subnet information"
+            state.add_progress_step("IP Allocation Agent", "failed", "Missing sheet data or subnet information")
             return state
         
         node_ips = state.sheets_data.get("node_ips", [])
         if not node_ips:
             state.error = "No node IPs found in sheet data"
+            state.add_progress_step("IP Allocation Agent", "failed", "No node IPs found in sheet data")
             return state
+        
+        state.add_progress_step("IP Allocation Agent", "started", 
+                              f"Allocating IPs for {len(node_ips)} nodes from subnet {state.subnet}")
         
         # Allocate IPs
         allocations = await ip_allocator.allocate_ips(node_ips, state.subnet, state.fqdn)
         state.ip_allocations = allocations
         state.current_step = "ips_allocated"
         
+        master_count = sum(1 for a in allocations if a.get("node_type") == "master")
+        worker_count = sum(1 for a in allocations if a.get("node_type") == "worker")
+        
+        state.add_progress_step("IP Allocation Agent", "completed", 
+                              f"Successfully allocated IPs to {len(allocations)} nodes",
+                              {"master_nodes": master_count, "worker_nodes": worker_count,
+                               "subnet": state.subnet})
+        
         return state
     except Exception as e:
         state.error = f"IP allocation failed: {str(e)}"
+        state.add_progress_step("IP Allocation Agent", "failed", f"Error: {str(e)}")
         return state
 
 async def dns_creation_agent(state: AgentState) -> AgentState:
