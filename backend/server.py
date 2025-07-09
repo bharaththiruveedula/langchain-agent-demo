@@ -588,10 +588,10 @@ async def chat_endpoint(message: ChatMessage):
         
         # Create response
         response = ChatResponse(
-            message=result.response_message,
+            message=result.response_message if hasattr(result, 'response_message') else "Response generated successfully",
             sender="assistant",
-            data=result.response_data,
-            table_data=result.response_table
+            data=result.response_data if hasattr(result, 'response_data') else None,
+            table_data=result.response_table if hasattr(result, 'response_table') else None
         )
         
         # Save assistant response
